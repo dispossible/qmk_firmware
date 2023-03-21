@@ -39,7 +39,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 
   /* Keymap _FL: Function Layer */
   [_FL] = LAYOUT(
-    KC_TRNS,  KC_MUTE,  KC_VOLD,  KC_VOLU,  KC_TRNS,  KC_MRWD,  KC_MPLY,  KC_MFFD,  KC_TRNS,  KC_TRNS,  KC_TRNS,  RGB_RMOD,  RGB_MOD,   _______,  _______,  _______,  _______,  _______,
+    _______,  KC_MUTE,  KC_VOLD,  KC_VOLU,  _______,  KC_MRWD,  KC_MPLY,  KC_MFFD,  _______,  _______,  _______,  RGB_RMOD,  RGB_MOD,   _______,  _______,  _______,  _______,  _______,
     _______,  _______,  _______,  _______,  _______,  _______,  _______,  _______,  _______,  _______,  _______,  _______,   _______,   _______,  _______,  _______,  _______,  _______,
     _______,  _______,  _______,  _______,  _______,  _______,  _______,  _______,  _______,  _______,  _______,  _______,   _______,   QK_BOOT,  _______,  _______,  _______,  _______,
     _______,  _______,  _______,  _______,  _______,  _______,  _______,  _______,  _______,  _______,  _______,  _______,              _______,  _______,  _______,  _______,
@@ -47,7 +47,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     _______,  UC_WIN,   _______,                      _______,                                _______,  _______,  _______,   RGB_RMOD,  RGB_VAD,  RGB_MOD,  _______,  _______)
 };
 
-// All these numbers match up with the indexed positions in the keymap above
+// All these numbers match up with the indexed positions in the keymap above.
 const uint8_t NUM_LOCK_KEY_INDEX = 13;
 const uint8_t CAPS_LOCK_KEY_INDEX = 54;
 const uint8_t ALPHA_KEYS[] = { 
@@ -74,6 +74,7 @@ int clamp(int x, int lower, int upper) {
 
 // vars for tracking the animation state
 double caps_flood_position = 0;
+double num_flood_position = 0;
 uint32_t last_frame_time;
 
 // This is basically the amount of mills to wait between frames
@@ -100,6 +101,32 @@ const uint8_t ALPHA_KEY_GROUPS[12][3] = {
   { 46, -1, -1 }
 };
 
+const int NUM_FLOOD_STEPS = 9;
+const int NUM_FLOOD_HEIGHT = 3;
+const uint8_t NUM_PAD_KEY_GROUPS[9][3] = {
+  { -1, -1, -1 },
+  { -1, -1, -1 },
+  { -1, -1, -1 },
+  { 50, -1, -1 },
+  { 51, 67, -1 },
+  { 52, 68, 83 },
+  { 69, 84, -1 },
+  { 85, 97, -1 },
+  { 98, -1, -1 },
+};
+
+/**
+ * Get the current hues complimentary color
+ */
+RGB getComplimentColor(void){
+  // Get the inverted hue as RGB values
+  HSV hsv = {0, 255, 255};
+  hsv.h = (rgb_matrix_get_hue() + 128) % 256;
+  hsv.s = rgb_matrix_get_sat();
+  hsv.v = rgb_matrix_get_val();
+  RGB rgb = hsv_to_rgb(hsv);
+  return rgb;
+}
 
 /**
  * A helper function that can be called while capslock is on or animating to progress
@@ -108,13 +135,7 @@ const uint8_t ALPHA_KEY_GROUPS[12][3] = {
 void update_cap_flood(void){
   int flood_index = clamp(floor(caps_flood_position), 0, CAPS_FLOOD_STEPS);
 
-  // Get the inverted hue as RGB values
-  HSV hsv = {0, 255, 255};
-  hsv.h = (rgb_matrix_get_hue() + 128) % 256;
-  hsv.s = rgb_matrix_get_sat();
-  hsv.v = rgb_matrix_get_val();
-  RGB rgb = hsv_to_rgb(hsv);
-
+  RGB rgb = getComplimentColor();
   rgb_matrix_set_color(CAPS_LOCK_KEY_INDEX, rgb.r, rgb.g, rgb.b);
 
   for (int i = 0; i < flood_index; i++) {
@@ -130,6 +151,50 @@ void update_cap_flood(void){
 }
 
 /**
+ * A helper function that can be called while numlock is on or animating to progress
+ * or maintain the state of the LEDs
+ */
+void update_num_flood(void){
+  int flood_index = clamp(floor(num_flood_position), 0, NUM_FLOOD_STEPS);
+
+  RGB rgb = getComplimentColor();
+  rgb_matrix_set_color(NUM_LOCK_KEY_INDEX, rgb.r, rgb.g, rgb.b);
+
+  for (int i = 0; i < flood_index; i++) {
+    for (int ii = 0; ii < NUM_FLOOD_HEIGHT; ii++) {
+      uint8_t key = NUM_PAD_KEY_GROUPS[i][ii];
+      if (g_led_config.flags[key] & LED_FLAG_KEYLIGHT) {
+        if( key > -1 ){
+          rgb_matrix_set_color(key, rgb.r, rgb.g, rgb.b);
+        }
+      }
+    }
+  }
+}
+
+/* Abstracted the increment logic so it can be reused between keys */
+double updateFloodPosition(double flood_position, double flood_amount, bool lock_state, int max_flood){
+  double next_position = flood_position;
+  if (lock_state) {
+    if(next_position < 0){
+      next_position = 0;
+    }
+    if(next_position <= max_flood){
+      next_position = next_position + flood_amount;
+    }
+  } else {
+    if(next_position > max_flood){
+      next_position = max_flood;
+    }
+    if( next_position >= 0 ){
+      next_position = next_position - flood_amount;
+    }
+  }
+  return next_position;
+}
+
+
+/**
  * This is invoked once every cycle by the firmware and is used to set the Caps/Num/Scroll lock indicators
  */
 bool rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
@@ -139,35 +204,25 @@ bool rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
   double flood_amount = (double) delta /  (double) FLOOD_SPEED_DIVISOR;
   
   // Deal with CapsLock
-  if (host_keyboard_led_state().caps_lock) {
-    if(caps_flood_position < 0){
-      caps_flood_position = 0;
-    }
-    if(caps_flood_position <= CAPS_FLOOD_STEPS){
-      caps_flood_position = caps_flood_position + flood_amount;
-    }
+  caps_flood_position = updateFloodPosition(
+    caps_flood_position,
+    flood_amount,
+    host_keyboard_led_state().caps_lock,
+    CAPS_FLOOD_STEPS
+  );
+  if (host_keyboard_led_state().caps_lock || caps_flood_position > 0) {
     update_cap_flood();
-  } else {
-    if(caps_flood_position > CAPS_FLOOD_STEPS){
-      caps_flood_position = CAPS_FLOOD_STEPS;
-    }
-    if( caps_flood_position >= 0 ){
-      caps_flood_position = caps_flood_position - flood_amount;
-      update_cap_flood();
-    }
   }
 
   // Deal with NumLock
-  if (!host_keyboard_led_state().num_lock) {
-    rgb_matrix_set_color(NUM_LOCK_KEY_INDEX, RGB_RED);
-
-    int arrLen = sizeof NUM_PAD_KEYS / sizeof NUM_PAD_KEYS[0];
-    for (int i = 0; i < arrLen; i++) {
-        uint8_t key = NUM_PAD_KEYS[i];
-        if (g_led_config.flags[key] & LED_FLAG_KEYLIGHT) {
-            rgb_matrix_set_color(key, RGB_RED);
-        }
-    }
+  num_flood_position = updateFloodPosition(
+    num_flood_position,
+    flood_amount,
+    !host_keyboard_led_state().num_lock,
+    NUM_FLOOD_STEPS
+  );
+  if (!host_keyboard_led_state().num_lock || num_flood_position > 0) {
+    update_num_flood();
   }
   
   last_frame_time = timer_read32();
